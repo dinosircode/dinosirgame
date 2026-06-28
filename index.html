@@ -6,7 +6,6 @@ https://github.com/dinosircode/dinosirgame
 https://www.linkedin.com/in/sreejeshrayirath/ -->
 
 <html lang="en">
-  
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
@@ -573,6 +572,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                         0.1), i * 60)); },
                 magnet() { blip(600, 0.15, 'sine', 0.08, 900);
                     blip(900, 0.2, 'sine', 0.07, 600); },
+                popper() { blip(800, 0.12, 'sine', 0.12, 1200); }, // new popper sound
             };
 
             /* ============ BIOMES ============ */
@@ -628,10 +628,10 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
             let state = State.READY;
             let speed, baseSpeed, distance, score, coins, best, shake, gameTime;
             let spawnTimer, nextSpawn, coinTimer, powerTimer;
-            let combo, comboTimer, lastMilestone, flash, biomeFlash, biomeBanner;
+            let combo, comboTimer, lastMilestone, lastCheckpoint, flash, biomeFlash, biomeBanner;
             best = parseInt(Store.get('best', '0'), 10) || 0;
 
-            /* ============ PLAYER ============ */
+            /* ============ PLAYER (main dino) ============ */
             const player = {
                 x: 175,
                 y: 0,
@@ -649,9 +649,47 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 magnet: 0,
                 invuln: 0,
                 trailPositions: [],
+                // Funny additions
+                tongueTimer: 0,
+                derpTimer: 0,
             };
             const GRAVITY = 2750,
                 JUMP_V = -1060;
+
+            /* ============ COMPANION DINOS (pack) ============ */
+            const companionColors = ['#f87171', '#60a5fa', '#fbbf24']; // red, blue, gold
+            const companionOffsets = [-90, -170, -250]; // x behind player
+            let companions = [];
+            // history buffer for delayed mimic
+            const HISTORY_SIZE = 20;
+            let playerHistory = [];
+
+            function initCompanions() {
+                companions = companionOffsets.map((offset, i) => ({
+                    offset,
+                    color: companionColors[i],
+                    legPhase: 0,
+                    ducking: false,
+                }));
+                playerHistory = [];
+            }
+
+            /* ============ CHEERLEADER DINOS ============ */
+            let cheerleaders = [];
+            const CHEER_SPAWN_INTERVAL = 1600; // distance units
+            let lastCheerX = 0;
+
+            function spawnCheerleaders() {
+                // pre-populate some
+                cheerleaders = [];
+                for (let x = INTERNAL_W + 200; x < INTERNAL_W + 4000; x += CHEER_SPAWN_INTERVAL + rand(-200, 200)) {
+                    cheerleaders.push({ x, y: GROUND_Y - 55, anim: rand(0, 10), pomPom: 0 });
+                }
+                lastCheerX = cheerleaders.length ? cheerleaders[cheerleaders.length - 1].x : INTERNAL_W + 200;
+            }
+
+            /* ============ POPPER PARTICLES (checkpoint) ============ */
+            let popperParticles = [];
 
             /* ============ COLLECTIBLES / OBSTACLES ============ */
             let obstacles = [],
@@ -709,6 +747,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 floaters = [];
                 confetti = [];
                 speedLines = [];
+                popperParticles = [];
                 player.y = GROUND_Y - player.h;
                 player.vy = 0;
                 player.onGround = true;
@@ -722,6 +761,8 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 player.legPhase = 0;
                 player.blink = 0;
                 player.tailWag = 0;
+                player.tongueTimer = 0;
+                player.derpTimer = 0;
                 spawnTimer = 0;
                 nextSpawn = 1.1;
                 coinTimer = 0;
@@ -729,10 +770,13 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 combo = 0;
                 comboTimer = 0;
                 lastMilestone = 0;
+                lastCheckpoint = 0;
                 flash = 0;
                 biomeFlash = 0;
                 biomeBanner = 0;
                 pal = biomePalette(0);
+                initCompanions();
+                spawnCheerleaders();
             }
             reset();
 
@@ -812,6 +856,29 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 }
             }
 
+            function popper(x, y) {
+                // burst of large circles that shoot up and fall
+                SFX.popper();
+                const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                for (let i = 0; i < 30; i++) {
+                    const angle = rand(-Math.PI * 0.8, -Math.PI * 0.2); // mostly upward
+                    const sp = rand(200, 600);
+                    popperParticles.push({
+                        x,
+                        y,
+                        vx: Math.cos(angle) * sp,
+                        vy: Math.sin(angle) * sp,
+                        life: 1.2,
+                        maxLife: 1.2,
+                        r: rand(5, 12),
+                        color: pick(colors),
+                        gravity: 800,
+                    });
+                }
+                // also a quick confetti for extra flair
+                confettiBurst(x, y);
+            }
+
             /* ============ INPUT ============ */
             function tryAudioResume() { const a = audioCtx(); if (a && a.state === 'suspended') a.resume(); }
 
@@ -834,6 +901,8 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                     } else {
                         SFX.jump();
                     }
+                    // funny tongue chance
+                    if (Math.random() < 0.3) player.tongueTimer = 0.5;
                 }
             }
 
@@ -961,7 +1030,10 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 if (state !== State.PLAY) { decay(dt);
                     shake *= 0.88;
                     flash *= 0.88;
-                    biomeFlash *= 0.9; return; }
+                    biomeFlash *= 0.9;
+                    // still move cheerleaders for visual
+                    for (const ch of cheerleaders) ch.x -= speed * dt * 0.28;
+                    return; }
 
                 gameTime += dt;
                 speed = baseSpeed + Math.min(gameTime * 14, 620) + (player.star > 0 ? 240 : 0);
@@ -978,12 +1050,19 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 if (biomeBanner > 0) biomeBanner -= dt;
                 biomeFlash *= 0.93;
 
-                // Milestones
+                // Milestones (every 500) – confetti
                 if (score - lastMilestone >= 500) {
                     lastMilestone = Math.floor(score / 500) * 500;
                     SFX.milestone();
                     confettiBurst(player.x + player.w / 2, player.y);
                     floater(player.x + player.w / 2, player.y - 40, lastMilestone + '!', '#fbbf24');
+                }
+                // Checkpoints (every 1000) – poppers
+                if (score - lastCheckpoint >= 1000) {
+                    lastCheckpoint = Math.floor(score / 1000) * 1000;
+                    popper(player.x + player.w / 2, player.y + player.h / 2);
+                    // also trigger funny derp face occasionally
+                    if (Math.random() < 0.5) player.derpTimer = 0.4;
                 }
 
                 // Parallax layers
@@ -1015,6 +1094,21 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 if (player.blink < -0.15 && Math.random() < 0.015) player.blink = 0.13;
                 if (player.onGround && Math.random() < 0.35) dust(player.x + 5, GROUND_Y, 1, 35, 50);
 
+                // Funny timers
+                if (player.tongueTimer > 0) player.tongueTimer -= dt;
+                if (player.derpTimer > 0) player.derpTimer -= dt;
+                // Random derp
+                if (player.derpTimer <= 0 && Math.random() < 0.003) player.derpTimer = 0.5;
+
+                // Companion history buffer
+                playerHistory.push({
+                    y: player.y,
+                    ducking: player.ducking,
+                    onGround: player.onGround,
+                    legPhase: player.legPhase,
+                });
+                if (playerHistory.length > HISTORY_SIZE) playerHistory.shift();
+
                 // Star trail
                 if (player.star > 0) {
                     player.star -= dt;
@@ -1043,6 +1137,19 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 powerTimer -= dt;
                 if (powerTimer <= 0) { spawnPower();
                     powerTimer = rand(15, 26); }
+
+                // Move cheerleaders and respawn
+                for (let i = cheerleaders.length - 1; i >= 0; i--) {
+                    const ch = cheerleaders[i];
+                    ch.x -= speed * 0.28 * dt; // same speed as hills
+                    ch.anim += dt * 4;
+                    if (ch.x < -120) {
+                        // respawn far ahead
+                        ch.x = lastCheerX + CHEER_SPAWN_INTERVAL + rand(-200, 200);
+                        ch.y = GROUND_Y - 55;
+                        lastCheerX = ch.x;
+                    }
+                }
 
                 // Collide obstacles
                 const ph = player.ducking ? player.h * 0.5 : player.h;
@@ -1101,6 +1208,8 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                         SFX.coin();
                         elCoins.textContent = coins;
                         coinsArr.splice(i, 1);
+                        // tongue chance
+                        if (Math.random() < 0.2) player.tongueTimer = 0.35;
                         continue;
                     }
                     if (c.x < -40) coinsArr.splice(i, 1);
@@ -1136,6 +1245,16 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 for (let i = speedLines.length - 1; i >= 0; i--) { const l = speedLines[i];
                     l.x -= speed * 2.4 * dt;
                     l.life -= dt; if (l.life <= 0 || l.x < -140) speedLines.splice(i, 1); }
+
+                // Update popper particles
+                for (let i = popperParticles.length - 1; i >= 0; i--) {
+                    const p = popperParticles[i];
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    p.vy += p.gravity * dt;
+                    p.life -= dt;
+                    if (p.life <= 0) popperParticles.splice(i, 1);
+                }
 
                 decay(dt);
                 shake *= 0.85;
@@ -1271,8 +1390,6 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 }
             }
 
-            
-
             function drawClouds() {
                 for (const c of clouds) {
                     ctx.globalAlpha = pal.night > 0.5 ? 0.35 : 0.75;
@@ -1376,6 +1493,112 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 ctx.globalAlpha = 1;
             }
 
+            /* ---------- Companion dino drawing (simplified) ---------- */
+            function drawMiniDino(x, y, duck, legPhase, color) {
+                ctx.save();
+                ctx.translate(x, y);
+                const s = 0.55; // scale
+                ctx.scale(s, s);
+                // simple shapes
+                const bodyColor = color;
+                const bodyDark = '#00000022'; // shadow
+                const bellyColor = '#ffffff44';
+                if (duck) {
+                    // ducking mini
+                    ctx.fillStyle = bodyColor;
+                    roundRect(0, 20, 60, 30, 10);
+                    ctx.fill();
+                    ctx.fillStyle = bellyColor;
+                    roundRect(8, 26, 44, 16, 8);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath();
+                    ctx.arc(46, 22, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#111';
+                    ctx.beginPath();
+                    ctx.arc(48, 22, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    // body
+                    ctx.fillStyle = bodyColor;
+                    roundRect(4, 10, 44, 44, 14);
+                    ctx.fill();
+                    // belly
+                    ctx.fillStyle = bellyColor;
+                    roundRect(10, 32, 24, 18, 8);
+                    ctx.fill();
+                    // head
+                    roundRect(28, -6, 38, 28, 10);
+                    ctx.fill();
+                    // eye
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath();
+                    ctx.arc(56, 2, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#111';
+                    ctx.beginPath();
+                    ctx.arc(58, 2, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                    // legs
+                    ctx.fillStyle = bodyColor;
+                    const l1 = Math.max(0, Math.sin(legPhase)) * 6;
+                    const l2 = Math.max(0, Math.sin(legPhase + Math.PI)) * 6;
+                    roundRect(12, 52, 12, 12 - l1, 3);
+                    ctx.fill();
+                    roundRect(32, 52, 12, 12 - l2, 3);
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            /* ---------- Cheerleader drawing ---------- */
+            function drawCheerleader(ch) {
+                ctx.save();
+                ctx.translate(ch.x, ch.y);
+                // body
+                ctx.fillStyle = '#ff6b6b';
+                roundRect(-10, -20, 20, 26, 8);
+                ctx.fill();
+                // head
+                ctx.fillStyle = '#feca57';
+                ctx.beginPath();
+                ctx.arc(0, -26, 10, 0, Math.PI * 2);
+                ctx.fill();
+                // eyes
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(-3, -28, 3, 0, Math.PI * 2);
+                ctx.arc(3, -28, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(-3, -28, 1.5, 0, Math.PI * 2);
+                ctx.arc(3, -28, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+                // pom-poms
+                const pomAngle = Math.sin(ch.anim) * 0.5;
+                ctx.fillStyle = '#fff';
+                for (const side of [-1, 1]) {
+                    ctx.save();
+                    ctx.translate(side * 12, -14);
+                    ctx.rotate(side * pomAngle);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+                // flag
+                ctx.fillStyle = '#e74c3c';
+                ctx.beginPath();
+                ctx.moveTo(0, -34);
+                ctx.lineTo(14, -40);
+                ctx.lineTo(0, -46);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            /* ---------- Main dino drawing with funny touches ---------- */
             function drawDino() {
                 const px = player.x,
                     py = player.y,
@@ -1452,15 +1675,32 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                     ctx.fillStyle = bodyColor;
                     roundRect(player.w - 12, dy - 8, 42, 36, 12);
                     ctx.fill();
-                    // Eye
+                    // Eye (derp or normal)
                     ctx.fillStyle = eyeWhite;
                     ctx.beginPath();
                     ctx.arc(player.w + 14, dy + 6, 5.5, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.fillStyle = eyeDark;
-                    ctx.beginPath();
-                    ctx.arc(player.w + 16, dy + 6, 2.8, 0, Math.PI * 2);
-                    ctx.fill();
+                    if (player.derpTimer > 0) {
+                        // cross eyes
+                        ctx.beginPath();
+                        ctx.arc(player.w + 12, dy + 4, 2.8, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(player.w + 16, dy + 8, 2.8, 0, Math.PI * 2);
+                        ctx.fill();
+                    } else {
+                        ctx.beginPath();
+                        ctx.arc(player.w + 16, dy + 6, 2.8, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    // Tongue
+                    if (player.tongueTimer > 0) {
+                        ctx.fillStyle = '#ef4444';
+                        ctx.beginPath();
+                        ctx.ellipse(player.w + 10, dy + 22, 5, 8, 0.2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
                     // Legs
                     ctx.fillStyle = bodyDark;
                     const lp = Math.sin(player.legPhase) * 5;
@@ -1507,7 +1747,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                     ctx.fill();
                     roundRect(72, 0, 15, 15, 5);
                     ctx.fill();
-                    // Eye
+                    // Eye (funny)
                     ctx.fillStyle = eyeWhite;
                     ctx.beginPath();
                     ctx.arc(64, 4, 6.5, 0, Math.PI * 2);
@@ -1515,6 +1755,14 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                     ctx.fillStyle = eyeDark;
                     if (player.blink > 0) {
                         ctx.fillRect(60, 3, 8, 1.8);
+                    } else if (player.derpTimer > 0) {
+                        // derp: cross eyes
+                        ctx.beginPath();
+                        ctx.arc(62, 2, 3.2, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(70, 6, 3.2, 0, Math.PI * 2);
+                        ctx.fill();
                     } else {
                         ctx.beginPath();
                         ctx.arc(66, 4, 3.2, 0, Math.PI * 2);
@@ -1524,6 +1772,17 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                     ctx.beginPath();
                     ctx.arc(82, 7, 1.6, 0, Math.PI * 2);
                     ctx.fill();
+                    // Tongue
+                    if (player.tongueTimer > 0) {
+                        ctx.fillStyle = '#ef4444';
+                        ctx.save();
+                        ctx.translate(76, 14);
+                        ctx.rotate(0.3);
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, 6, 12, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.restore();
+                    }
                     // Arm
                     ctx.fillStyle = bodyDark;
                     roundRect(46, 42, 15, 8, 3.5);
@@ -1572,6 +1831,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 ctx.restore();
             }
 
+            /* ---------- Obstacles & items ---------- */
             function drawCactus(o) {
                 ctx.save();
                 ctx.translate(o.x, o.y);
@@ -1728,6 +1988,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 ctx.restore();
             }
 
+            /* ---------- Particle & FX drawing ---------- */
             function drawParticlesFX() {
                 for (const p of particles) {
                     if (p.ring) { ctx.globalAlpha = clamp(p.life / p.maxl, 0, 1) * 0.45;
@@ -1738,6 +1999,14 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                         ctx.stroke(); continue; }
                     ctx.globalAlpha = clamp(p.life / p.max, 0, 1) * 0.75;
                     ctx.fillStyle = p.c || pal.g1;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                // popper particles
+                for (const p of popperParticles) {
+                    ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+                    ctx.fillStyle = p.color;
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
                     ctx.fill();
@@ -1773,6 +2042,7 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 ctx.globalAlpha = 1;
             }
 
+            /* ---------- Overlay helpers ---------- */
             function drawBanner() {
                 if (biomeBanner <= 0) return;
                 const a = clamp(biomeBanner > 1.8 ? (2.5 - biomeBanner) / 0.7 : biomeBanner / 1.8, 0, 1);
@@ -1860,6 +2130,23 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
                 drawGround();
                 if (['embers', 'leaves', 'snow', 'fireflies', 'sand'].includes(pal.weather)) drawWeatherFX();
                 drawParticlesFX();
+                // draw cheerleaders first
+                for (const ch of cheerleaders) drawCheerleader(ch);
+                // companions
+                if (state === State.PLAY || state === State.OVER) {
+                    const histLen = playerHistory.length;
+                    if (histLen > 0) {
+                        companions.forEach((comp, idx) => {
+                            const delayIdx = Math.max(0, histLen - 1 - Math.floor((idx + 1) * 3));
+                            const hist = playerHistory[delayIdx] || playerHistory[0];
+                            const compX = player.x + comp.offset;
+                            const compY = hist.y; // use delayed y
+                            const duck = hist.ducking;
+                            const leg = hist.legPhase + idx * 1.5; // offset leg phases
+                            drawMiniDino(compX, compY, duck, leg, comp.color);
+                        });
+                    }
+                }
                 for (const c of coinsArr) drawCoin(c);
                 for (const p of powerups) drawPower(p);
                 for (const o of obstacles) { if (o.type === 'cactus') drawCactus(o);
@@ -1912,6 +2199,8 @@ https://www.linkedin.com/in/sreejeshrayirath/ -->
             console.log('  ⭐ Star = invincibility + speed');
             console.log('  🧲 Magnet pulls coins toward you');
             console.log('  🌍 5 biomes to discover: Desert, Forest, Tundra, Volcano, Aurora');
+            console.log('  🦕 Companion dinos & cheerleaders added!');
+            console.log('  🎉 Checkpoint poppers every 1000 points!');
         })();
     </script>
 </body>
